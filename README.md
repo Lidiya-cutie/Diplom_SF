@@ -8,7 +8,8 @@
 
 Нужно решить, где бурить новую скважину.
 
-Вам предоставлены пробы нефти в трёх регионах: [регион_1](https://github.com/Lidiya-cutie/Diplom_SF/blob/master/geo_data_0.csv), [регион_2](https://github.com/Lidiya-cutie/Diplom_SF/blob/master/geo_data_1.csv), регион_3;
+Вам предоставлены пробы нефти в трёх регионах: [регион_1](https://github.com/Lidiya-cutie/Diplom_SF/blob/master/geo_data_0.csv), [регион_2](https://github.com/Lidiya-cutie/Diplom_SF/blob/master/geo_data_1.csv), [регион_3]
+(https://github.com/Lidiya-cutie/Diplom_SF/blob/master/geo_data_2.csv);
 
 в каждом 10 000 месторождений, где измерили качество нефти и объём её запасов.
 
