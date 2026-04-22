@@ -100,6 +100,16 @@ Run in order:
   - Install kernel into venv:
     - `python -m pip install ipykernel`
     - `python -m ipykernel install --user --name cloud-venv --display-name "Python (cloud-venv)"`
+- `TypeError: LinearRegression.__init__() got an unexpected keyword argument 'normalize'` (in `oilwells.ipynb`):
+  - Cause: notebook uses legacy sklearn argument removed in modern versions.
+  - Fix notebook code by removing `normalize=False` from `LinearRegression(...)`.
+  - Quick confirm before edit:
+    - `rg "LinearRegression\\(normalize=" "oilwells.ipynb"`
+- `OSError: 'seaborn' is not a valid package style` (in `Linear regress_nums.ipynb`):
+  - Cause: old style alias is not available in newer matplotlib.
+  - Fix notebook code by replacing `plt.style.use('seaborn')` with `plt.style.use('seaborn-v0_8')` (or remove the style line).
+  - Quick confirm before edit:
+    - `rg "plt\\.style\\.use\\('seaborn'\\)" "Linear regress_nums.ipynb"`
 
 ## 6) How to keep this skill updated
 
