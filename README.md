@@ -22,31 +22,37 @@
 
 ## Данные
 
-| Файл | Регион в ноутбуке | Скважин |
-|------|-------------------|---------|
-| [`geo_data_0.csv`](geo_data_0.csv) | Регион 0 | 100 000 |
-| [`geo_data_1.csv`](geo_data_1.csv) | Регион 1 | 100 000 |
-| [`geo_data_2.csv`](geo_data_2.csv) | Регион 2 | 100 000 |
+| Файл | Ключ | Скважин |
+|------|------|---------|
+| [`geo_data_0.csv`](geo_data_0.csv) | `region_0` | 100 000 |
+| [`geo_data_1.csv`](geo_data_1.csv) | `region_1` | 100 000 |
+| [`geo_data_2.csv`](geo_data_2.csv) | `region_2` | 100 000 |
 
-Признаки: `id`, `f0`, `f1`, `f2`, `product`.
+Признаки: `id`, `f0`, `f1`, `f2`, `product`. Data card: [`data/DATA_CARD.md`](data/DATA_CARD.md).
 
-> Ранее в описании встречалось «10 000 месторождений» — это ошибка формулировки. В файлах по **100 000** строк.
+### Качество данных
 
-### Качество данных (критично для интерпретации)
+Автоаудит: `python -m oilwells dq` → `artifacts/dq_report.json`.
 
-- `geo_data_1`: мало уникальных значений `product` (~12), ~8% нулей, корреляция `f2`–`product` ≈ **0.999**. RMSE модели падает до ~1 — признак **почти детерминированной/синтетической** целевой переменной.
-- Во всех файлах есть дубликаты `id` при отсутствии полных дубликатов строк — зафиксировано в EDA.
+- `region_1`: ~12 уникальных `product`, ~8% нулей, corr(`f2`,`product`) ≈ **0.999** → severity **critical**.
+- Во всех файлах есть дубликаты `id` (политика задаётся CLI, по умолчанию `keep_all`).
 
-## Структура репозитория
+## Структура
 
 ```
 Diplom_SF/
-├── oilwells.ipynb              # основной пайплайн: EDA → LR → bootstrap → вывод
-├── geo_data_0.csv / _1 / _2    # исходные данные
+├── oilwells/                 # воспроизводимый пайплайн (CLI)
+│   ├── dq.py                 # DQ-аудит
+│   ├── model.py              # LinearRegression + metrics
+│   ├── profit.py             # bootstrap + random baseline
+│   ├── sensitivity.py        # чувствительность к цене/бюджету/пулу
+│   └── pipeline.py / cli.py
+├── oilwells.ipynb            # исследовательский ноутбук
+├── geo_data_*.csv
+├── data/DATA_CARD.md
 ├── requirements.txt
-├── README.md
-└── theory/
-    └── linear_regression_numerical.ipynb  # учебный материал по GD/SGD (Boston), не часть бизнес-расчёта
+├── .github/workflows/oilwells-smoke.yml
+└── theory/                   # учебный GD/SGD (Boston), вне бизнес-расчёта
 ```
 
 ## Запуск
@@ -55,59 +61,72 @@ Diplom_SF/
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export PYTHONPATH=.
+
+# DQ-аудит
+python -m oilwells dq --data-dir . --out-dir artifacts
+
+# Полный прогон: модель, bootstrap, random baseline, sensitivity
+python -m oilwells run --data-dir . --out-dir artifacts
+
+# Быстрый CI smoke
+python -m oilwells smoke --data-dir . --out-dir artifacts --subsample 8000
+
+# Ноутбук
 jupyter notebook oilwells.ipynb
 ```
 
-Воспроизводимость: `random_state=12345`, split 75/25, Bootstrap 1000 итераций.
+Политика дубликатов id: `--dup-id-policy keep_all|drop_keep_first|drop_keep_last`.
 
-## Методика (кратко)
+Артефакты: `artifacts/dq_report.json`, `pipeline_report.json`, `leaderboard.csv`, `smoke_report.json`.
+
+## Методика
 
 | Этап | Реализация |
 |------|------------|
-| Split | `train_test_split(..., test_size=0.25, random_state=12345)` |
-| Масштабирование | `StandardScaler.fit` только на train |
-| Модель | `sklearn.linear_model.LinearRegression` |
-| Метрики valid | RMSE, R², средние факт/прогноз |
-| Прибыль | `sum(top200 product) * 450e3 - 10e9` |
-| Риск | доля bootstrap-прогонов с прибылью < 0 |
+| Split | 75/25, `random_state=12345` |
+| Scaling | `StandardScaler` fit только на train |
+| Модель | `LinearRegression` (ограничение задачи) |
+| Метрики | RMSE, R² |
+| Bootstrap | 1000× pool=500 → top-200 по прогнозу; profit по факту; sampling через **iloc** |
+| Baseline | тот же bootstrap, но 200 скважин **случайно** из пула |
+| Sensitivity | сетка revenue/budget ×{0.8,1.0,1.2}, pool ∈{300,500,700} |
+| Риск-гейт | P(profit < 0) < 2.5% |
 
-Точечная прибыль «топ-200 из всего valid» — справочная; **решение по регионам** — только по bootstrap.
+## Результаты (канонический прогон)
 
-## Результаты (ожидаемый порядок величин)
+| Регион | RMSE | Bootstrap ср. прибыль | Риск | vs random (lift) | Гейт |
+|--------|------|----------------------|------|------------------|------|
+| `region_1` | ~0.89 | ~456 млн ₽ | ~1.5% | ≫ 0 | OK* |
+| `region_2` | ~40.0 | ~404 млн ₽ | ~7.6% | ≫ 0 | FAIL |
+| `region_0` | ~37.6 | ~396 млн ₽ | ~6.9% | ≫ 0 | FAIL |
 
-После прогона `oilwells.ipynb` типичная картина SkillFactory-датасета:
+\*Формальный победитель по условию задачи, но **DQ critical** — без аудита источника не использовать как единственное бизнес-решение.
 
-| Регион | RMSE (ориентир) | Bootstrap ср. прибыль | Риск убытков | Гейт <2.5% |
-|--------|-----------------|----------------------|-------------|------------|
-| 0 (`geo_data_0`) | ~37.6 | ~396 млн ₽ | ~6.9% | нет |
-| 1 (`geo_data_1`) | ~0.9 | ~456 млн ₽ | ~1.5% | да (формально) |
-| 2 (`geo_data_2`) | ~40.0 | ~404 млн ₽ | ~7.6% | нет |
+Модель даёт большой lift относительно случайного отбора: случайные 200 из 500 в среднем ниже порога безубыточности (~111 тыс. барр.), поэтому baseline убыточен, а ранжирование по LR окупается.
 
-Формальный выбор по условию задачи — **регион 1**, при этом вывод **обязан** сопровождаться оговоркой о качестве данных.
+Sensitivity: доля прогонов сетки с прохождением риск-гейта выше у `region_1`, но заметно падает при ухудшении revenue/budget — решение неустойчиво к экономике проекта.
 
-## Рекомендации по улучшению (roadmap)
+## CI
 
-### Data / DQ
-1. Аудит источника `geo_data_1` (синтетика, округление, утечка признака в target).
-2. Явная политика по дубликатам `id` (drop / aggregate / keep + флаг).
-3. Data card / schema в репозитории (типы, единицы, версия выгрузки).
+GitHub Actions: `.github/workflows/oilwells-smoke.yml` — `python -m oilwells smoke` на subsample + assert, что `region_1` помечен critical в DQ.
 
-### Modeling
-4. Даже при ограничении «только LR»: отчёт по остаткам, VIF/мультиколлинеарность, влияние `f2`.
-5. Если ограничение снять: ElasticNet / градиентный бустинг + калибровка прогноза объёма.
-6. Групповая кросс-валидация / nested CV вместо одного split для оценки RMSE.
+## Что уже закрыто из roadmap
 
-### Decision science
-7. Чувствительность к `PRODUCT_REVENUE`, бюджету и размеру пула (500/200).
-8. Opportunity cost: сравнение с «случайным отбором 200 из 500».
-9. Отдельно моделировать риск (CVaR / вероятность убытка) как KPI дашборда.
+- [x] Автоматический DQ-аудит `geo_data_1` + JSON-отчёт  
+- [x] Явная политика дубликатов `id`  
+- [x] Sensitivity по цене / бюджету / размеру пула  
+- [x] Random baseline 200 из 500  
+- [x] Пакет `oilwells/` + CLI + JSON/CSV артефакты  
+- [x] CI smoke  
 
-### MLOps
-10. Вынести пайплайн в `src/` + CLI (`python -m oilwells.run`) с сохранением метрик в JSON.
-11. Зафиксировать версии в `requirements.txt` / lockfile; CI: smoke на subsample.
-12. Не хранить огромные CSV в git long-term — DVC/S3 + sample в репо.
-13. MLflow/Comet: логирование RMSE, R², bootstrap-распределения по регионам.
+## Дальнейшие улучшения (вне текущего scope)
+
+1. DVC/S3 для CSV вместо хранения только в git  
+2. Если снимут ограничение «только LR» — ElasticNet/бустинг + калибровка объёма  
+3. CVaR / opportunity-cost дашборд  
+4. MLflow-логирование распределений bootstrap  
 
 ## Теория
 
-Учебный ноутбук по численному решению линейной регрессии (градиентный спуск / SGD на Boston): [`theory/linear_regression_numerical.ipynb`](theory/linear_regression_numerical.ipynb). К расчёту прибыли по нефтяным регионам **не подключён**.
+[`theory/linear_regression_numerical.ipynb`](theory/linear_regression_numerical.ipynb) — численное решение LR (GD/SGD на Boston). К нефтяному расчёту не подключено.
