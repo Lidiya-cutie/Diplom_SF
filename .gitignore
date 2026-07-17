@@ -163,3 +163,13 @@ cython_debug/
 artifacts/
 .venv/
 diplom_venv/
+
+# DVC / MLflow / local stores
+.dvc/cache/
+.dvc/tmp/
+.dvc-storage/
+mlruns/
+# Full datasets tracked by DVC (samples remain in data/samples/)
+/geo_data_0.csv
+/geo_data_1.csv
+/geo_data_2.csv

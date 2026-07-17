@@ -1,0 +1,8 @@
+[core]
+    remote = localremote
+['remote "localremote"']
+    url = ../.dvc-storage
+['remote "minio"']
+    url = s3://diplom-sf/dvc
+    endpointurl = http://127.0.0.1:9100
+    region = us-east-1

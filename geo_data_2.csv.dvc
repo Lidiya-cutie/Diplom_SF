@@ -1,0 +1,5 @@
+outs:
+- md5: 24c7d27380b35493060ef0832b7cf817
+  size: 8194892
+  hash: md5
+  path: geo_data_2.csv
