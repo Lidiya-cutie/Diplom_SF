@@ -10,123 +10,136 @@
 
 ## Бизнес-задача
 
-Компания «ГлавРосГосНефть» выбирает регион для разработки:
+1. Оценить запасы скважин моделью (официально — **только LinearRegression**).
+2. Из пула 500 отобрать 200 лучших по прогнозу.
+3. Бюджет 10 млрд ₽, выручка 450 тыс. ₽ / тыс. баррелей.
+4. Решение по Bootstrap: средняя прибыль, 95% ДИ, риск убытков **< 2.5%**, плюс **CVaR 5%**.
 
-1. В регионе исследуют скважины и измеряют признаки.
-2. Модель оценивает объём запасов (`product`, тыс. баррелей). По условию задачи допускается **только линейная регрессия**.
-3. Из 500 кандидатов отбирают **200** скважин с лучшим прогнозом.
-4. Бюджет разработки — **10 млрд ₽**; выручка — **450 тыс. ₽** за тыс. баррелей.
-5. Решение принимают по **Bootstrap**: средняя прибыль, 95% ДИ, риск убытков **< 2.5%**.
+## Данные и DVC/S3
 
-Подробности Bootstrap: [статья ODS на Хабре](https://habr.com/ru/companies/ods/articles/324402/).
+Полные CSV (**100k×3**) версионируются через **DVC**, не через git.
 
-## Данные
+| Артефакт | Назначение |
+|----------|------------|
+| `geo_data_*.csv.dvc` | указатели на полные датасеты |
+| `data/samples/geo_data_*.csv` | 5k-сэмплы для CI/smoke (в git) |
+| `data/DATA_CARD.md` | data card / DQ |
 
-| Файл | Ключ | Скважин |
-|------|------|---------|
-| [`geo_data_0.csv`](geo_data_0.csv) | `region_0` | 100 000 |
-| [`geo_data_1.csv`](geo_data_1.csv) | `region_1` | 100 000 |
-| [`geo_data_2.csv`](geo_data_2.csv) | `region_2` | 100 000 |
+### Локальный remote + MinIO (S3-compatible)
 
-Признаки: `id`, `f0`, `f1`, `f2`, `product`. Data card: [`data/DATA_CARD.md`](data/DATA_CARD.md).
+AWS account в окружении может быть недоступен — рабочий S3-контур поднят на MinIO:
 
-### Качество данных
+```bash
+# 1) MinIO API :9100 / console :9101
+bash scripts/start_minio.sh
 
-Автоаудит: `python -m oilwells dq` → `artifacts/dq_report.json`.
+# 2) DVC remotes: localremote (.dvc-storage) + minio (s3://diplom-sf/dvc)
+bash scripts/setup_dvc.sh
 
-- `region_1`: ~12 уникальных `product`, ~8% нулей, corr(`f2`,`product`) ≈ **0.999** → severity **critical**.
-- Во всех файлах есть дубликаты `id` (политика задаётся CLI, по умолчанию `keep_all`).
+# 3) Получить полные CSV
+export AWS_ACCESS_KEY_ID=diplom_sf
+export AWS_SECRET_ACCESS_KEY=diplom_sf_secret
+export AWS_EC2_METADATA_DISABLED=true
+dvc pull -r localremote   # или: dvc pull -r minio
+```
+
+Переключение на реальный AWS S3:
+
+```bash
+dvc remote add -f aws s3://<bucket>/diplom-sf
+dvc remote modify aws region <region>
+dvc push -r aws
+```
 
 ## Структура
 
 ```
-Diplom_SF/
-├── oilwells/                 # воспроизводимый пайплайн (CLI)
-│   ├── dq.py                 # DQ-аудит
-│   ├── model.py              # LinearRegression + metrics
-│   ├── profit.py             # bootstrap + random baseline
-│   ├── sensitivity.py        # чувствительность к цене/бюджету/пулу
-│   └── pipeline.py / cli.py
-├── oilwells.ipynb            # исследовательский ноутбук
-├── geo_data_*.csv
-├── data/DATA_CARD.md
-├── requirements.txt
-├── .github/workflows/oilwells-smoke.yml
-└── theory/                   # учебный GD/SGD (Boston), вне бизнес-расчёта
+oilwells/           # CLI-пайплайн
+scripts/            # start_minio.sh, setup_dvc.sh
+data/samples/       # CI samples
+artifacts/          # отчёты, dashboard.html, mlruns/ (gitignore)
+geo_data_*.csv.dvc
+oilwells.ipynb
+theory/
 ```
 
-## Запуск
+## Установка
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 export PYTHONPATH=.
-
-# DQ-аудит
-python -m oilwells dq --data-dir . --out-dir artifacts
-
-# Полный прогон: модель, bootstrap, random baseline, sensitivity
-python -m oilwells run --data-dir . --out-dir artifacts
-
-# Быстрый CI smoke
-python -m oilwells smoke --data-dir . --out-dir artifacts --subsample 8000
-
-# Ноутбук
-jupyter notebook oilwells.ipynb
 ```
 
-Политика дубликатов id: `--dup-id-policy keep_all|drop_keep_first|drop_keep_last`.
+Рекомендуемый venv на большой диск: `/mldata/venvs/diplom_sf`.
 
-Артефакты: `artifacts/dq_report.json`, `pipeline_report.json`, `leaderboard.csv`, `smoke_report.json`.
+## CLI
 
-## Методика
+```bash
+# DQ
+python -m oilwells dq --data-dir . --out-dir artifacts
 
-| Этап | Реализация |
-|------|------------|
-| Split | 75/25, `random_state=12345` |
-| Scaling | `StandardScaler` fit только на train |
-| Модель | `LinearRegression` (ограничение задачи) |
-| Метрики | RMSE, R² |
-| Bootstrap | 1000× pool=500 → top-200 по прогнозу; profit по факту; sampling через **iloc** |
-| Baseline | тот же bootstrap, но 200 скважин **случайно** из пула |
-| Sensitivity | сетка revenue/budget ×{0.8,1.0,1.2}, pool ∈{300,500,700} |
-| Риск-гейт | P(profit < 0) < 2.5% |
+# Официальный путь (LR) + sensitivity + CVaR + MLflow + dashboard
+python -m oilwells run --data-dir . --out-dir artifacts --models lr
 
-## Результаты (канонический прогон)
+# Экспериментальное сравнение: LR vs ElasticNet vs HistGBR
+python -m oilwells compare --data-dir . --out-dir artifacts
 
-| Регион | RMSE | Bootstrap ср. прибыль | Риск | vs random (lift) | Гейт |
-|--------|------|----------------------|------|------------------|------|
-| `region_1` | ~0.89 | ~456 млн ₽ | ~1.5% | ≫ 0 | OK* |
-| `region_2` | ~40.0 | ~404 млн ₽ | ~7.6% | ≫ 0 | FAIL |
-| `region_0` | ~37.6 | ~396 млн ₽ | ~6.9% | ≫ 0 | FAIL |
+# CI smoke на samples
+python -m oilwells smoke --data-dir data/samples --out-dir artifacts
+```
 
-\*Формальный победитель по условию задачи, но **DQ critical** — без аудита источника не использовать как единственное бизнес-решение.
+MLflow UI:
 
-Модель даёт большой lift относительно случайного отбора: случайные 200 из 500 в среднем ниже порога безубыточности (~111 тыс. барр.), поэтому baseline убыточен, а ранжирование по LR окупается.
+```bash
+mlflow ui --backend-store-uri ./artifacts/mlruns --port 5000
+```
 
-Sensitivity: доля прогонов сетки с прохождением риск-гейта выше у `region_1`, но заметно падает при ухудшении revenue/budget — решение неустойчиво к экономике проекта.
+Дашборд: `artifacts/dashboard.html` (Plotly: прибыль, риск, распределения, CVaR).
+
+## Модели
+
+| kind | Статус | Назначение |
+|------|--------|------------|
+| `lr` | **official** | требование SkillFactory |
+| `elasticnet` | experimental | регуляризация |
+| `gbr` / `hgbr` | experimental | нелинейный бустинг |
+
+Официальная рекомендация региона считается **только по `lr`**. Экспериментальные модели пишутся в leaderboard/MLflow с тегом `EXPERIMENTAL` (пример: `hgbr` на `region_2` часто проходит риск-гейт — сигнал исследовать нелинейность, не замена официальному выводу).
+
+## Метрики решения
+
+- RMSE / R² на valid  
+- Bootstrap mean profit, 95% CI, P(loss)  
+- Lift vs random baseline (200 случайных из 500)  
+- **VaR 5% / CVaR 5%** по bootstrap-прибыли  
+- Sensitivity: revenue/budget ×{0.8,1.0,1.2}, pool ∈{300,500,700}
+
+## Канонические результаты (LR / full data)
+
+| Регион | RMSE | Mean profit | Loss risk | CVaR5% | Gate |
+|--------|------|-------------|-----------|--------|------|
+| region_1 | ~0.89 | ~456 млн | ~1.5% | >0 | OK* |
+| region_2 | ~40 | ~404 млн | ~7.6% | <0 | FAIL |
+| region_0 | ~37.6 | ~396 млн | ~6.9% | <0 | FAIL |
+
+\*DQ **critical** на `region_1` (дискретизация target + corr≈1 с `f2`) — формальный победитель с обязательным caveat.
 
 ## CI
 
-GitHub Actions: `.github/workflows/oilwells-smoke.yml` — `python -m oilwells smoke` на subsample + assert, что `region_1` помечен critical в DQ.
+`.github/workflows/oilwells-smoke.yml` — smoke на `data/samples` (LR+ElasticNet + assert DQ critical на region_1).
 
-## Что уже закрыто из roadmap
+## Что реализовано
 
-- [x] Автоматический DQ-аудит `geo_data_1` + JSON-отчёт  
-- [x] Явная политика дубликатов `id`  
-- [x] Sensitivity по цене / бюджету / размеру пула  
-- [x] Random baseline 200 из 500  
-- [x] Пакет `oilwells/` + CLI + JSON/CSV артефакты  
-- [x] CI smoke  
+- [x] DVC + local remote + MinIO S3  
+- [x] Samples в git для CI  
+- [x] ElasticNet / HistGBR как experimental compare  
+- [x] MLflow tracking  
+- [x] CVaR/VaR + HTML dashboard  
+- [x] Random baseline + sensitivity  
 
-## Дальнейшие улучшения (вне текущего scope)
+## Дальше (опционально)
 
-1. DVC/S3 для CSV вместо хранения только в git  
-2. Если снимут ограничение «только LR» — ElasticNet/бустинг + калибровка объёма  
-3. CVaR / opportunity-cost дашборд  
-4. MLflow-логирование распределений bootstrap  
-
-## Теория
-
-[`theory/linear_regression_numerical.ipynb`](theory/linear_regression_numerical.ipynb) — численное решение LR (GD/SGD на Boston). К нефтяному расчёту не подключено.
+- Прод-бакет AWS вместо MinIO  
+- Калибровка прогноза объёма / conformal intervals  
+- Онлайн MLflow server + auth

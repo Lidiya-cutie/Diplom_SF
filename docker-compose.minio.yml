@@ -1,0 +1,32 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: diplom-sf-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: diplom_sf
+      MINIO_ROOT_PASSWORD: diplom_sf_secret
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    volumes:
+      - /mldata/tmp/diplom-sf-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: diplom-sf-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 diplom_sf diplom_sf_secret &&
+      mc mb -p local/diplom-sf || true &&
+      mc anonymous set download local/diplom-sf/samples || true &&
+      echo minio-ready
+      "
