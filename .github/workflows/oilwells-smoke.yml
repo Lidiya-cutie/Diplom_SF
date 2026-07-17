@@ -1,0 +1,30 @@
+name: oilwells-smoke
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: DQ + pipeline smoke
+        run: python -m oilwells smoke --data-dir . --out-dir artifacts --subsample 8000
+        env:
+          PYTHONPATH: .
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oilwells-smoke
+          path: artifacts/
